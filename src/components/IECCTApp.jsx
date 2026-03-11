@@ -111,7 +111,11 @@ async function evaluateWarmth(transcription) {
   const raw = await callClaude([{ role: "user", content:
     `Transcripción de teleconsulta médica en El Salvador:\n"${transcription}"\nEvalúa calidez con instrumento IECCT-SV. Puntaje 1-5 por criterio.\nResponde SOLO JSON válido, sin texto extra ni markdown:\n{"acomodacion":0,"validacion":0,"cierre":0,"analisis_resumen":"2-3 oraciones","aspectos_positivos":["a","b"],"areas_mejora":["a","b"]}`
   }], `Eres auditor de salud pública de El Salvador especializado en calidez de teleconsultas IECCT-SV. Responde ÚNICAMENTE JSON válido.`, 900);
-  return JSON.parse(raw.replace(/```json|```/g, "").trim());
+  try {
+    return JSON.parse(raw.replace(/```json|```/g, "").trim());
+  } catch {
+    throw new Error("Claude no devolvió JSON válido. Intenta de nuevo.");
+  }
 }
 
 // ── Groq directo (soporta CORS) ───────────────────────────────────────────────
@@ -152,6 +156,9 @@ async function fetchFromDrive(driveUrl) {
   const res = await fetch(data.directUrl);
   if (!res.ok) throw new Error(`Error al descargar Drive (${res.status}). Verifica que el archivo sea público.`);
   const blob = await res.blob();
+  if (blob.type && blob.type.startsWith("text/")) {
+    throw new Error("Google Drive devolvió HTML en lugar del video. El archivo puede ser muy grande (>100MB) o no ser público. Descárgalo manualmente y cárgalo desde tu dispositivo.");
+  }
   return new File([blob], "teleconsulta.mp4", { type: blob.type || "video/mp4" });
 }
 
