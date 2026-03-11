@@ -4,7 +4,6 @@ export const maxDuration = 60;
 export async function POST(request) {
   try {
     const body = await request.json();
-
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -14,24 +13,10 @@ export async function POST(request) {
       },
       body: JSON.stringify(body),
     });
-
     const data = await res.json();
-
-    if (!res.ok) {
-      return new Response(
-        JSON.stringify({ error: data?.error?.message || `Error Anthropic ${res.status}` }),
-        { status: res.status, headers: { "Content-Type": "application/json" } }
-      );
-    }
-
-    return new Response(JSON.stringify(data), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    if (!res.ok) return new Response(JSON.stringify({ error: data?.error?.message || `Error ${res.status}` }), { status: res.status });
+    return new Response(JSON.stringify(data), { status: 200, headers: { "Content-Type": "application/json" } });
   } catch (e) {
-    return new Response(
-      JSON.stringify({ error: e.message }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify({ error: e.message }), { status: 500 });
   }
 }
