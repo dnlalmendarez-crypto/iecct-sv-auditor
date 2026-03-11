@@ -1,14 +1,17 @@
-export const maxDuration = 60; // Vercel max timeout en segundos
+export const runtime = "edge";
 
 export async function POST(request) {
   try {
     const formData = await request.formData();
     const file = formData.get("file");
-    const provider = formData.get("provider"); // "groq" o "openai"
+    const provider = formData.get("provider") || "groq";
     const apiKey = formData.get("apiKey");
 
     if (!file || !apiKey) {
-      return new Response(JSON.stringify({ error: "Faltan parámetros: file y apiKey son requeridos." }), { status: 400 });
+      return new Response(
+        JSON.stringify({ error: "Faltan parámetros: file y apiKey son requeridos." }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
     }
 
     const upstreamForm = new FormData();
@@ -21,7 +24,6 @@ export async function POST(request) {
       url = "https://api.openai.com/v1/audio/transcriptions";
       upstreamForm.append("model", "whisper-1");
     } else {
-      // groq por defecto
       url = "https://api.groq.com/openai/v1/audio/transcriptions";
       upstreamForm.append("model", "whisper-large-v3");
     }
@@ -37,7 +39,7 @@ export async function POST(request) {
     if (!res.ok) {
       return new Response(
         JSON.stringify({ error: data?.error?.message || `Error ${provider} (${res.status})` }),
-        { status: res.status }
+        { status: res.status, headers: { "Content-Type": "application/json" } }
       );
     }
 
@@ -46,6 +48,9 @@ export async function POST(request) {
       headers: { "Content-Type": "application/json" },
     });
   } catch (e) {
-    return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+    return new Response(
+      JSON.stringify({ error: e.message }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
   }
 }
