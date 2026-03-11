@@ -81,10 +81,12 @@ async function extractFrames(file, count = 5) {
 
 // ── Claude ────────────────────────────────────────────────────────────────────
 async function callClaude(messages, system, maxTokens = 900) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const body = { model: "claude-sonnet-4-20250514", max_tokens: maxTokens, messages };
+  if (system) body.system = system;
+  const res = await fetch("/api/claude", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: maxTokens, system, messages }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.error?.message || `Error Anthropic ${res.status}`); }
   return (await res.json()).content.map((b) => b.text || "").join("");
