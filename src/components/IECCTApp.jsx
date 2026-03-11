@@ -148,15 +148,22 @@ async function transcribeWithOpenAI(audioFile, apiKey) {
   return (await res.json()).text;
 }
 
-// ── Google Drive vía proxy Vercel (necesario por CORS de Drive) ───────────────
+// ── Google Drive: el proxy valida y devuelve URL directa, el navegador descarga
 async function fetchFromDrive(driveUrl) {
   const id = extractDriveId(driveUrl);
   if (!id) throw new Error("Link de Google Drive inválido.");
-  const res = await fetch(`/api/drive?id=${id}`);
-  if (!res.ok) {
-    const e = await res.json().catch(() => ({}));
-    throw new Error(e?.error || "No se pudo descargar el archivo de Drive. Verifica que sea público.");
-  }
+
+  // Paso 1: pedir al proxy que valide el archivo y devuelva la URL directa
+  const checkRes = await fetch(`/api/drive?id=${id}`);
+  const checkData = await checkRes.json();
+  if (!checkRes.ok) throw new Error(checkData?.error || "No se pudo acceder al archivo de Drive.");
+
+  const directUrl = checkData.directUrl;
+
+  // Paso 2: el navegador descarga directamente desde Google (sin pasar por Vercel)
+  const res = await fetch(directUrl);
+  if (!res.ok) throw new Error(`Error al descargar el video (${res.status}). Verifica que el archivo sea público.`);
+
   const blob = await res.blob();
   return new File([blob], "teleconsulta.mp4", { type: blob.type || "video/mp4" });
 }

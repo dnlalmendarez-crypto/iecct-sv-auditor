@@ -12,45 +12,35 @@ export async function GET(request) {
   }
 
   try {
-    // Usar usercontent.google.com que es más directo
-    const driveRes = await fetch(
-      `https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t`,
-      {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        },
-      }
-    );
+    // Intentar obtener la URL de descarga directa sin descargar el archivo
+    const checkUrl = `https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t`;
 
-    const contentType = driveRes.headers.get("content-type") || "";
+    const headRes = await fetch(checkUrl, {
+      method: "HEAD",
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      },
+      redirect: "follow",
+    });
 
+    const contentType = headRes.headers.get("content-type") || "";
+
+    // Si Drive responde con HTML, el archivo no es público
     if (contentType.includes("text/html")) {
       return new Response(
         JSON.stringify({
           error:
-            "El archivo de Drive debe ser público. Ve a Drive → clic derecho en el video → Compartir → 'Cualquiera con el enlace puede ver'.",
+            "El archivo debe ser público. Ve a Google Drive → clic derecho en el video → Compartir → 'Cualquiera con el enlace puede ver'.",
         }),
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
     }
 
-    if (!driveRes.ok) {
-      return new Response(
-        JSON.stringify({ error: `Error Drive (${driveRes.status})` }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
-      );
-    }
-
-    // Streaming directo — sin cargar el archivo completo en memoria
-    return new Response(driveRes.body, {
-      status: 200,
-      headers: {
-        "Content-Type": contentType.includes("video") || contentType.includes("audio")
-          ? contentType
-          : "video/mp4",
-        "Access-Control-Allow-Origin": "*",
-      },
-    });
+    // Devolver la URL directa para que el navegador descargue sin pasar por Vercel
+    return new Response(
+      JSON.stringify({ directUrl: checkUrl }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
   } catch (e) {
     return new Response(
       JSON.stringify({ error: "Error: " + e.message }),
