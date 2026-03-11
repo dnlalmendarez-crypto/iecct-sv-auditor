@@ -1,7 +1,7 @@
 "use client";
 import { useState, useRef, useCallback } from "react";
 
-// ── Google Drive: extraer file ID ────────────────────────────────────────────
+// ── Google Drive: extraer file ID ─────────────────────────────────────────────
 function extractDriveId(url) {
   const m1 = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
   if (m1) return m1[1];
@@ -10,7 +10,7 @@ function extractDriveId(url) {
   return null;
 }
 
-// ── Extraer frames del video (local, sin red) ─────────────────────────────────
+// ── Extraer frames del video (local) ─────────────────────────────────────────
 async function extractFrames(file, count = 5) {
   return new Promise((resolve) => {
     const video = document.createElement("video");
@@ -40,22 +40,14 @@ async function extractFrames(file, count = 5) {
   });
 }
 
-// ── Claude API (análisis visual + calidez) ────────────────────────────────────
+// ── Claude API ────────────────────────────────────────────────────────────────
 async function callClaude(messages, system, maxTokens = 900) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: maxTokens,
-      system,
-      messages,
-    }),
+    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: maxTokens, system, messages }),
   });
-  if (!res.ok) {
-    const e = await res.json().catch(() => ({}));
-    throw new Error(e?.error?.message || `Error Anthropic ${res.status}`);
-  }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.error?.message || `Error Anthropic ${res.status}`); }
   const d = await res.json();
   return d.content.map((b) => b.text || "").join("");
 }
@@ -65,13 +57,10 @@ async function analyzeVisualPresence(frames) {
   let hits = 0;
   for (const frame of frames.slice(0, 3)) {
     try {
-      const r = await callClaude(
-        [{ role: "user", content: [
-          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: frame } },
-          { type: "text", text: "¿Hay un rostro humano visible mirando hacia la cámara en esta imagen de teleconsulta médica? Responde SOLO: SI o NO." },
-        ]}],
-        undefined, 10
-      );
+      const r = await callClaude([{ role: "user", content: [
+        { type: "image", source: { type: "base64", media_type: "image/jpeg", data: frame } },
+        { type: "text", text: "¿Hay un rostro humano visible mirando hacia la cámara en esta imagen de teleconsulta médica? Responde SOLO: SI o NO." },
+      ]}], undefined, 10);
       if (/^s[ií]/i.test(r.trim())) hits++;
     } catch { /* omitir */ }
   }
@@ -79,58 +68,43 @@ async function analyzeVisualPresence(frames) {
 }
 
 async function evaluateWarmth(transcription) {
-  const raw = await callClaude(
-    [{ role: "user", content:
-      `Transcripción de teleconsulta médica en El Salvador:
+  const raw = await callClaude([{ role: "user", content:
+    `Transcripción de teleconsulta médica en El Salvador:
 "${transcription}"
 
 Evalúa calidez con instrumento IECCT-SV. Puntaje 1-5 por criterio.
 Responde SOLO JSON válido, sin texto extra ni markdown:
 {"acomodacion":0,"validacion":0,"cierre":0,"analisis_resumen":"2-3 oraciones","aspectos_positivos":["a","b"],"areas_mejora":["a","b"]}`
-    }],
-    `Eres auditor de salud pública de El Salvador especializado en calidez de teleconsultas IECCT-SV. Responde ÚNICAMENTE JSON válido.`,
-    900
-  );
+  }],
+  `Eres auditor de salud pública de El Salvador especializado en calidez de teleconsultas IECCT-SV. Responde ÚNICAMENTE JSON válido.`,
+  900);
   return JSON.parse(raw.replace(/```json|```/g, "").trim());
 }
 
-// ── Groq Whisper (gratis, 600 min/día) ───────────────────────────────────────
-async function transcribeGroq(file, apiKey) {
+// ── Transcripción vía API route (evita CORS) ──────────────────────────────────
+async function transcribeViaProxy(file, provider, apiKey) {
   if (file.size > 25 * 1024 * 1024) throw new Error("Archivo mayor a 25 MB. Comprime el video.");
   const form = new FormData();
   form.append("file", file, file.name || "audio.mp4");
-  form.append("model", "whisper-large-v3");
-  form.append("language", "es");
-  form.append("response_format", "json");
-  const res = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: form,
-  });
-  if (!res.ok) {
-    const e = await res.json().catch(() => ({}));
-    throw new Error(e?.error?.message || "Error Groq — verifica tu API Key en console.groq.com");
-  }
-  return (await res.json()).text;
+  form.append("provider", provider);
+  form.append("apiKey", apiKey);
+  const res = await fetch("/api/transcribe", { method: "POST", body: form });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error || "Error al transcribir");
+  return data.text;
 }
 
-// ── OpenAI Whisper ($0.006/min) ───────────────────────────────────────────────
-async function transcribeOpenAI(file, apiKey) {
-  if (file.size > 24 * 1024 * 1024) throw new Error("Archivo mayor a 24 MB.");
-  const form = new FormData();
-  form.append("file", file, file.name || "audio.mp4");
-  form.append("model", "whisper-1");
-  form.append("language", "es");
-  const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: form,
-  });
+// ── Google Drive vía API route (evita CORS) ───────────────────────────────────
+async function fetchFromDrive(driveUrl) {
+  const id = extractDriveId(driveUrl);
+  if (!id) throw new Error("Link de Google Drive inválido.");
+  const res = await fetch(`/api/drive?id=${id}`);
   if (!res.ok) {
     const e = await res.json().catch(() => ({}));
-    throw new Error(e?.error?.message || "Error OpenAI Whisper");
+    throw new Error(e?.error || "No se pudo descargar el archivo de Drive.");
   }
-  return (await res.json()).text;
+  const blob = await res.blob();
+  return new File([blob], "teleconsulta.mp4", { type: blob.type || "video/mp4" });
 }
 
 // ── Web Speech API ────────────────────────────────────────────────────────────
@@ -186,14 +160,7 @@ function StepRow({ num, label, status }) {
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
-const STEPS = [
-  "Obteniendo video",
-  "Extrayendo fotogramas",
-  "Analizando presencia visual (IA)",
-  "Transcribiendo audio",
-  "Evaluando calidez (Claude)",
-  "Compilando informe",
-];
+const STEPS = ["Obteniendo video", "Extrayendo fotogramas", "Analizando presencia visual", "Transcribiendo audio", "Evaluando calidez (Claude)", "Compilando informe"];
 
 export default function IECCTApp() {
   const [screen, setScreen] = useState("upload");
@@ -230,18 +197,11 @@ export default function IECCTApp() {
     setError(null);
     setSteps(STEPS.map((label, i) => ({ label, status: i === 0 ? "active" : "idle" })));
     setScreen("processing");
-
     try {
       // Paso 0: obtener video
       let file = videoFile;
       if (!file && driveLink.trim()) {
-        const id = extractDriveId(driveLink.trim());
-        if (!id) throw new Error("Link de Google Drive inválido.");
-        const url = `https://drive.google.com/uc?export=download&id=${id}`;
-        const res = await fetch(url);
-        if (!res.ok) throw new Error("No se pudo descargar el archivo de Drive. Asegúrate que sea público.");
-        const blob = await res.blob();
-        file = new File([blob], "teleconsulta.mp4", { type: blob.type || "video/mp4" });
+        file = await fetchFromDrive(driveLink.trim());
       }
       if (!file) throw new Error("Selecciona un video o pega un link de Google Drive.");
       setStep(0, "done"); setStep(1, "active");
@@ -262,12 +222,9 @@ export default function IECCTApp() {
       } else if (txMode === "webspeech") {
         tx = speechFinal.trim();
         if (!tx) throw new Error("Graba el audio con el micrófono antes de analizar.");
-      } else if (txMode === "groq") {
-        if (!apiKey.trim()) throw new Error("Pega tu API Key de Groq.");
-        tx = await transcribeGroq(file, apiKey.trim());
-      } else if (txMode === "openai") {
-        if (!apiKey.trim()) throw new Error("Pega tu API Key de OpenAI.");
-        tx = await transcribeOpenAI(file, apiKey.trim());
+      } else if (txMode === "groq" || txMode === "openai") {
+        if (!apiKey.trim()) throw new Error(`Pega tu API Key de ${txMode === "groq" ? "Groq" : "OpenAI"}.`);
+        tx = await transcribeViaProxy(file, txMode, apiKey.trim());
       }
       setStep(3, "done"); setStep(4, "active");
 
@@ -331,7 +288,7 @@ export default function IECCTApp() {
     a.click();
   };
 
-  // ─── Styles ──────────────────────────────────────────────────────────────────
+  // ─── Styles ───────────────────────────────────────────────────────────────────
   const bg = { minHeight: "100vh", padding: "18px 14px", background: "linear-gradient(160deg,#060d1a,#0c1628 55%,#0a1220)", fontFamily: "'Inter',sans-serif", color: "#e2e8f0" };
   const card = (x = {}) => ({ background: "rgba(12,22,46,0.9)", border: "1px solid rgba(56,189,248,0.11)", borderRadius: 17, padding: "20px 18px", marginBottom: 12, ...x });
   const inp = { width: "100%", boxSizing: "border-box", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 11, padding: "11px 14px", color: "#e2e8f0", fontSize: 14, outline: "none" };
@@ -350,27 +307,17 @@ export default function IECCTApp() {
       color: "#34d399",
       badge: "✅ 600 min/día GRATIS · Mismo modelo que OpenAI · 10× más rápido",
       placeholder: "gsk_...",
-      steps: [
-        { t: "Ve a ", link: "console.groq.com", linkText: "console.groq.com" },
-        { t: "Crea cuenta gratis (Google o email)" },
-        { t: "Menú → API Keys → Create API Key" },
-        { t: "La key empieza con ", code: "gsk_" },
-        { t: "Sin tarjeta de crédito" },
-      ],
+      steps: ["Ve a console.groq.com", "Crea cuenta gratis (Google o email)", "Menú → API Keys → Create API Key", "La key empieza con gsk_"],
     },
     openai: {
       color: "#38bdf8",
       badge: "💳 De pago · $0.006/min · Alta precisión",
       placeholder: "sk-...",
-      steps: [
-        { t: "Ve a ", link: "platform.openai.com", linkText: "platform.openai.com" },
-        { t: "Inicia sesión → API Keys → Create new secret key" },
-        { t: "La key empieza con ", code: "sk-" },
-      ],
+      steps: ["Ve a platform.openai.com", "Inicia sesión → API Keys → Create new secret key", "La key empieza con sk-"],
     },
   };
 
-  // ── Processing screen ────────────────────────────────────────────────────────
+  // ── Processing ────────────────────────────────────────────────────────────────
   if (screen === "processing") return (
     <div style={bg}>
       <style>{`@keyframes blink{0%,100%{opacity:1}50%{opacity:0.2}}`}</style>
@@ -378,7 +325,7 @@ export default function IECCTApp() {
         <div style={{ textAlign: "center", marginBottom: 22 }}>
           <div style={{ fontSize: 38 }}>🔬</div>
           <h2 style={{ fontSize: 19, fontWeight: 800, margin: "8px 0 4px", color: "#38bdf8" }}>Analizando Teleconsulta</h2>
-          <p style={{ fontSize: 12, color: "#3d5068", margin: 0 }}>Procesando con Claude IA · 1–2 minutos</p>
+          <p style={{ fontSize: 12, color: "#3d5068", margin: 0 }}>Procesando con Claude IA · 1–3 minutos</p>
         </div>
         <div style={card()}>
           {steps.map((s, i) => <StepRow key={i} num={i + 1} label={s.label} status={s.status} />)}
@@ -387,7 +334,7 @@ export default function IECCTApp() {
     </div>
   );
 
-  // ── Results screen ────────────────────────────────────────────────────────────
+  // ── Results ───────────────────────────────────────────────────────────────────
   if (screen === "results" && results) {
     const gc = results.total >= 4.5 ? "#34d399" : results.total >= 3.5 ? "#fbbf24" : results.total >= 2.5 ? "#fb923c" : "#f87171";
     return (
@@ -434,7 +381,7 @@ export default function IECCTApp() {
     );
   }
 
-  // ── Upload screen ─────────────────────────────────────────────────────────────
+  // ── Upload ────────────────────────────────────────────────────────────────────
   const canSubmit = (videoFile || driveLink.trim()) &&
     (txMode === "manual" ? manualTx.trim() :
      txMode === "webspeech" ? speechFinal.trim() :
@@ -477,13 +424,12 @@ export default function IECCTApp() {
           <input ref={fileRef} type="file" accept="video/*,audio/*" style={{ display: "none" }} onChange={(e) => { setVideoFile(e.target.files[0] || null); setDriveLink(""); }} />
           <div style={{ textAlign: "center", fontSize: 11, color: "#263549", margin: "8px 0" }}>— o Google Drive —</div>
           <input style={inp} placeholder="https://drive.google.com/file/d/..." value={driveLink} onChange={(e) => { setDriveLink(e.target.value); setVideoFile(null); }} />
-          <div style={{ fontSize: 11, color: "#263549", marginTop: 5 }}>💡 Drive: clic en Compartir → "Cualquiera con el enlace"</div>
+          <div style={{ fontSize: 11, color: "#263549", marginTop: 5 }}>💡 Drive: Compartir → "Cualquiera con el enlace puede ver"</div>
         </div>
 
         {/* Card 2: Transcripción */}
         <div style={card()}>
           <span style={lbl}>2 · Transcripción del Audio</span>
-
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 7, marginBottom: 14 }}>
             {TX_OPTIONS.map((m) => (
               <button key={m.id} onClick={() => { setTxMode(m.id); setShowKeyHelp(false); }} style={{ padding: "9px 6px", borderRadius: 10, border: `1px solid ${txMode === m.id ? "#38bdf8" : "rgba(255,255,255,0.08)"}`, background: txMode === m.id ? "rgba(56,189,248,0.09)" : "rgba(255,255,255,0.02)", color: txMode === m.id ? "#38bdf8" : "#3d5068", cursor: "pointer", textAlign: "center" }}>
@@ -494,7 +440,6 @@ export default function IECCTApp() {
             ))}
           </div>
 
-          {/* Groq / OpenAI key input */}
           {(txMode === "groq" || txMode === "openai") && (() => {
             const h = KEY_HELP[txMode];
             return (
@@ -502,24 +447,17 @@ export default function IECCTApp() {
                 <div style={{ background: `${h.color}12`, border: `1px solid ${h.color}25`, borderRadius: 10, padding: "8px 12px", marginBottom: 10, fontSize: 12, color: h.color }}>{h.badge}</div>
                 <input style={inp} type="password" placeholder={h.placeholder + " (API Key)"} value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
                 <button onClick={() => setShowKeyHelp(!showKeyHelp)} style={{ background: "none", border: "none", color: "#38bdf8", fontSize: 11, cursor: "pointer", marginTop: 6, padding: 0 }}>
-                  {showKeyHelp ? "▲" : "▼"} ¿Cómo obtengo la API Key? (es gratis para Groq)
+                  {showKeyHelp ? "▲" : "▼"} ¿Cómo obtengo la API Key?
                 </button>
                 {showKeyHelp && (
                   <div style={{ background: "rgba(56,189,248,0.04)", border: "1px solid rgba(56,189,248,0.12)", borderRadius: 10, padding: "10px 12px", marginTop: 8, fontSize: 12, color: "#7d95b0", lineHeight: 1.9 }}>
-                    {h.steps.map((s, i) => (
-                      <div key={i}>
-                        {i + 1}. {s.t}
-                        {s.link && <strong style={{ color: "#38bdf8" }}>{s.linkText}</strong>}
-                        {s.code && <code style={{ color: "#fbbf24", background: "rgba(251,191,36,0.1)", padding: "1px 5px", borderRadius: 4 }}>{s.code}</code>}
-                      </div>
-                    ))}
+                    {h.steps.map((s, i) => <div key={i}>{i + 1}. {s}</div>)}
                   </div>
                 )}
               </div>
             );
           })()}
 
-          {/* Web Speech */}
           {txMode === "webspeech" && (
             <div>
               <div style={{ background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.15)", borderRadius: 10, padding: "8px 12px", marginBottom: 11, fontSize: 12, color: "#d4a944", lineHeight: 1.6 }}>
@@ -539,7 +477,6 @@ export default function IECCTApp() {
             </div>
           )}
 
-          {/* Manual */}
           {txMode === "manual" && (
             <textarea style={{ ...inp, minHeight: 130, resize: "vertical" }} placeholder="Pega aquí la transcripción completa de la teleconsulta..." value={manualTx} onChange={(e) => setManualTx(e.target.value)} />
           )}
@@ -548,7 +485,7 @@ export default function IECCTApp() {
         <button onClick={handleProcess} disabled={!canSubmit} style={btnP({ opacity: canSubmit ? 1 : 0.3, cursor: canSubmit ? "pointer" : "not-allowed" })}>
           🚀 INICIAR ANÁLISIS DE IA
         </button>
-        <div style={{ textAlign: "center", marginTop: 12, fontSize: 11, color: "#1c2a3a" }}>🔒 El video no se almacena en ningún servidor · Análisis con Claude AI</div>
+        <div style={{ textAlign: "center", marginTop: 12, fontSize: 11, color: "#1c2a3a" }}>🔒 El video no se almacena · Análisis con Claude AI</div>
       </div>
     </div>
   );
