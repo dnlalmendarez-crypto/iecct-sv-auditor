@@ -1,6 +1,6 @@
 export const metadata = {
-  title: "IECCT-SV AI Auditor",
-  description: "Evaluación automática de calidez en teleconsultas médicas de El Salvador",
+  title: "Auditoría Médica — Análisis de No Conformidades",
+  description: "Generador de informes de auditoría médica IECCT-SV. Análisis de No Conformidades y Eventos de Riesgo por médico.",
 };
 
 export default function RootLayout({ children }) {

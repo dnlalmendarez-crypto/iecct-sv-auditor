@@ -1,5 +1,5 @@
 "use client";
-import App from "../components/IECCTApp";
+import AuditorReporteApp from "../components/AuditorReporteApp";
 export default function Page() {
-  return <App />;
+  return <AuditorReporteApp />;
 }
